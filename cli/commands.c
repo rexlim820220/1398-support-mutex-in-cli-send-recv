@@ -73,6 +73,7 @@ char *config_editor;
 struct nc_session *session;
 volatile int interleave;
 int timed;
+pthread_mutex_t _mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static int cmd_disconnect(const char *arg, char **tmp_config_file);
 
@@ -300,11 +301,13 @@ cli_send_recv(struct nc_rpc *rpc, FILE *output, NC_WD_MODE wd_mode, int timeout_
     NC_MSG_TYPE msgtype;
     struct timespec ts_start, ts_stop;
 
+    pthread_mutex_lock(&_mutex);
+
     if (timed) {
         ret = cli_gettimespec(&ts_start, &mono);
         if (ret) {
             ERROR(__func__, "Getting current time failed (%s).", strerror(errno));
-            return ret;
+            goto cleanup;
         }
     }
 
@@ -314,10 +317,12 @@ cli_send_recv(struct nc_rpc *rpc, FILE *output, NC_WD_MODE wd_mode, int timeout_
         if (nc_session_get_status(session) != NC_STATUS_RUNNING) {
             cmd_disconnect(NULL, NULL);
         }
-        return -1;
+        ret = -1;
+        goto cleanup;
     } else if (msgtype == NC_MSG_WOULDBLOCK) {
         ERROR(__func__, "Timeout for sending the RPC expired.");
-        return -1;
+        ret = -1;
+        goto cleanup;
     }
 
 recv_reply:
@@ -327,10 +332,12 @@ recv_reply:
         if (nc_session_get_status(session) != NC_STATUS_RUNNING) {
             cmd_disconnect(NULL, NULL);
         }
-        return -1;
+        ret = -1;
+        goto cleanup;
     } else if (msgtype == NC_MSG_WOULDBLOCK) {
         ERROR(__func__, "Timeout for receiving a reply expired.");
-        return -1;
+        ret = -1;
+        goto cleanup;
     } else if (msgtype == NC_MSG_NOTIF) {
         /* read again */
         goto recv_reply;
@@ -470,6 +477,7 @@ recv_reply:
     }
 
 cleanup:
+    pthread_mutex_unlock(&_mutex);
     lyd_free_tree(envp);
     lyd_free_tree(op);
     return ret;
